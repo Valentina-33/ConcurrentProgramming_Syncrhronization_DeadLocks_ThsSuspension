@@ -1,6 +1,8 @@
 
 ## Escuela Colombiana de Ingeniería
 ### Arquitecturas de Software – ARSW
+## Paula Lozano y Mariana Malagón
+## Nota: Los reportes y pruebas de todos los puntos excepto el 10 se encuentra en docs/Lab03.pdf, las del punto 10 están en RESPUESTAS.txt y las imágenes de este punto están tanto en el pdf como en la carpeta images
 
 
 #### Ejercicio – programación concurrente, condiciones de carrera y sincronización de hilos. EJERCICIO INDIVIDUAL O EN PAREJAS.

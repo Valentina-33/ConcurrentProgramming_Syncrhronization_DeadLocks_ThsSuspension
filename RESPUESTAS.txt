@@ -1,0 +1,136 @@
+Punto 10 - Remoción de inmortales muertos
+Aclaración: Imágenes de los errores encontrado las dejamos en Lab03.pdf y en la carpeta images
+
+Análisis: si genera condiciónn de carrera?
+
+Si. La lista immortalsPopulation es una LinkedList normal, que no es thread-safe.
+Cuando un inmortal muere (su salud llega a 0 o menos), lo removemos de esa lista
+dentro de fight() con immortalsPopulation.remove(i2). Mientras eso pasa, decenas
+de otros hilos estan simultaneamente llamando immortalsPopulation.indexOf(this)
+y immortalsPopulation.get(nextFighterIndex) en run(), y ademas el botón
+"Pause and check" itera toda la lista con un for-each para sumar la salud.
+Todas esas lecturas ocurren en paralelo con la escritura (remove), sin ningún
+tipo de sincronización, lo cual es la definición misma de una condición de carrera.
+
+Que problema se presento al ejecutar con muchos inmortales (probamos con 1000):
+
+Se produjo una cascada de fallos, no un error aislado:
+
+1. ConcurrentModificationException en el hilo AWT-EventQueue-0, al iterar la
+   lista desde el boton "Pause and check" (for-each usa un iterador fail-fast)
+   mientras otro hilo modificaba la lista con remove() al mismo tiempo.
+
+   
+2. NullPointerException dentro de LinkedList.get() (invocado desde
+   Immortal.run()). Esto evidencia que la estructura interna de
+   nodos enlazados (next/prev) de la LinkedList quedo corrupta por las
+   remociones concurrentes sin protección, ya no es solo una excepción de
+   "modifique la lista mientras la recorrían", es corrupción real de la
+   estructura de datos compartida.
+
+
+3. Cascada masiva de IllegalArgumentException: bound must be positive en
+   Random.nextInt() (Immortal.run()). Una vez corrupta la lista,
+   immortalsPopulation.size() empezó a devolver 0, y decenas de hilos
+   murieron en cadena al intentar hacer r.nextInt(0). En cuestión de
+   segundos, la mayoría de los hilos de la simulación terminaron matándose
+   por esta excepcion no capturada.
+
+   
+
+Conclusión:
+
+Remover elementos de una lista compartida mientras múltiples hilos la leen
+concurrentemente (indexOf, get, iteracion), sin ningún mecanismo de
+sincronización, no produce solo errores aislados o intermitentes: produce
+corrupción estructural completa de la colección, que termina matando la
+simulación entera en cuestión de segundos cuando hay muchos inmortales.
+Esto confirma que si es necesaria una estrategia específica para manejar
+la remoción de forma segura sin recurrir a "synchronized" (que harían el
+acceso secuencial y lento), es decir, usar una colección concurrente
+diseñada para este escenario (lecturas muy frecuentes, escrituras poco
+frecuentes).
+
+Corrección aplicada: se reemplazó LinkedList por CopyOnWriteArrayList en
+la lista immortalsPopulation. Esta colección de java.util.concurrent
+garantiza que las lecturas (get, indexOf, iteracion) nunca lancen
+ConcurrentModificationException ni vean la lista corrupta, porque cada
+escritura (remove) crea internamente una copia nueva del arreglo interno,
+sin necesidad de que nuestro código use ningún bloque synchronized.
+
+Segundo problema encontrado (tras aplicar CopyOnWriteArrayList):
+
+Al volver a probar con 1000 inmortales durante varios minutos, ya no
+aparecieron ConcurrentModificationException ni NullPointerException, pero
+sí siguió apareciendo una cascada de IllegalArgumentException: bound must
+be positive en Random.nextInt() (Immortal.run()).
+
+
+Este ya no es un problema de sincronización de la lista, sino de diseño:
+cuando un inmortal muere, lo sacamos de immortalsPopulation, pero nada
+detiene su propio hilo (run() sigue en su while(true)). En fight(), la
+única validación es sobre el objetivo (if (i2.getHealth() > 0)), nunca
+sobre quien ataca (this). Es decir, un inmortal ya "muerto" (fuera de la
+lista) puede seguir atacando exitosamente a los que si siguen vivos,
+robandoles salud, se vuelve un "zombie" que sigue drenando puntos de
+vida de la poblacion activa, pero esos puntos quedan atrapados en su
+propio campo health sin que el vuelva jamas a la lista. Con muchos
+zombies atacando a un grupo cada vez mas chico de sobrevivientes
+listados, ese grupo termina vaciandose por completo (size() == 0), y ahí
+revienta r.nextInt(0).
+
+Primer intento de corrección (insuficiente): se agregó una salida
+temprana al inicio del run(), para que el hilo termine su ejecución en
+cuanto detecta que ya murió:
+
+    if (health <= 0) {
+        return;
+    }
+
+Este chequeo no fue suficiente: la excepción siguió apareciendo igual de
+seguido. La razón es que health puede subir y bajar (no es un estado de
+un solo sentido): un inmortal ya eliminado de la lista, si vuelve a
+atacar con éxito antes de notar que "murió", gana salud otra vez
+(this.health += defaultDamageValue) y puede quedar con salud positiva de
+nuevo. En su siguiente vuelta del ciclo, el chequeo "if (health <= 0)"
+ya no lo detiene porque su salud volvió a ser positiva, así que sigue
+atacando indefinidamente, un zombie que "revive" cada vez que pega con
+éxito, sin límite, drenando salud de la lista activa para siempre. Esto
+se confirmó incluso despues de declarar health como volatile (para
+descartar un problema de visibilidad entre hilos): el error persistía
+igual, confirmando que el problema era de diseño y no de visibilidad de
+memoria.
+
+
+Corrección final aplicada: se agregó una bandera booleana "alive",
+independiente de health, que solo se apaga una vez (true -> false) y
+nunca vuelve a true. Se apaga exactamente en el mismo momento en que el
+inmortal se remueve de la lista (dentro del bloque synchronized de
+fight(), mediante un nuevo método eliminate()):
+
+    if (i2.getHealth() <= 0) {
+        i2.eliminate();
+        immortalsPopulation.remove(i2);
+    }
+
+Y en run(), el chequeo de salida pasó a depender de esta bandera en vez
+de la salud:
+
+    if (!alive) {
+        return;
+    }
+
+Como "alive" nunca vuelve a true, un inmortal eliminado no puede
+"revivir" sin importar cuánta salud gane después atacando. Con esta
+corrección, la simulación con 1000 inmortales corrió varios minutos sin
+ninguna excepción en consola.
+
+   
+Conclusión final: remover un elemento de una estructura compartida no
+basta con sacarlo de la colección visible, si el hilo dueño de ese
+elemento sigue vivo y puede seguir modificando estado compartido (en
+este caso, atacando y ganando salud), puede seguir afectando el sistema
+aunque ya no aparezca "listado". La solución robusta necesita un estado
+de eliminación explícito y de un solo sentido, no inferido de un valor
+que puede fluctuar como la salud.
+
