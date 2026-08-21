@@ -2,8 +2,8 @@ package edu.eci.arsw.highlandersim;
 
 import java.awt.BorderLayout;
 import java.awt.EventQueue;
-import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import javax.swing.JFrame;
 import javax.swing.JPanel;
@@ -30,11 +30,15 @@ public class ControlFrame extends JFrame {
     private JPanel contentPane;
 
     private List<Immortal> immortals;
+    private PauseCoordinator pauseCoordinator;
 
     private JTextArea output;
     private JLabel statisticsLabel;
     private JScrollPane scrollPane;
     private JTextField numOfImmortals;
+    private JButton btnPauseAndCheck;
+    private JButton btnResume;
+    private JButton btnStop;
 
     /**
      * Launch the application.
@@ -79,24 +83,29 @@ public class ControlFrame extends JFrame {
                 }
 
                 btnStart.setEnabled(false);
+                btnPauseAndCheck.setEnabled(true);
+                btnResume.setEnabled(true);
+                btnStop.setEnabled(true);
 
             }
         });
         toolBar.add(btnStart);
 
-        JButton btnPauseAndCheck = new JButton("Pause and check");
+        btnPauseAndCheck = new JButton("Pause and check");
         btnPauseAndCheck.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
 
-                /*
-				 * COMPLETAR
-                 */
                 for (Immortal im : immortals) {
-                    im.suspend();
+                    im.pauseImmortal();
                 }
-                // Completamos
 
-                int sum = 0;
+                try {
+                    pauseCoordinator.awaitAllPaused();
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+
+                int sum = 0;    
                 for (Immortal im : immortals) {
                     sum += im.getHealth();
                 }
@@ -109,18 +118,13 @@ public class ControlFrame extends JFrame {
         });
         toolBar.add(btnPauseAndCheck);
 
-        JButton btnResume = new JButton("Resume");
+        btnResume = new JButton("Resume");
 
         btnResume.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
-                /**
-                 * IMPLEMENTAR
-                 */
                 for (Immortal im : immortals) {
-                    im.resume();
+                    im.resumeImmortal();
                 }
-                // Implementamos
-
             }
         });
 
@@ -134,9 +138,25 @@ public class ControlFrame extends JFrame {
         toolBar.add(numOfImmortals);
         numOfImmortals.setColumns(10);
 
-        JButton btnStop = new JButton("STOP");
+        btnStop = new JButton("STOP");
         btnStop.setForeground(Color.RED);
         toolBar.add(btnStop);
+
+        btnPauseAndCheck.setEnabled(false);
+        btnResume.setEnabled(false);
+        btnStop.setEnabled(false);
+
+        btnStop.addActionListener(new ActionListener() {
+            public void actionPerformed(ActionEvent e) {
+                for (Immortal im : immortals) {
+                    im.stopImmortal();
+                }
+                btnPauseAndCheck.setEnabled(false);
+                btnResume.setEnabled(false);
+                btnStop.setEnabled(false);
+                btnStart.setEnabled(true);
+            }
+        });
 
         scrollPane = new JScrollPane();
         contentPane.add(scrollPane, BorderLayout.CENTER);
@@ -158,10 +178,11 @@ public class ControlFrame extends JFrame {
         try {
             int ni = Integer.parseInt(numOfImmortals.getText());
 
-            List<Immortal> il = new LinkedList<Immortal>();
+            List<Immortal> il = new CopyOnWriteArrayList<Immortal>();
+            pauseCoordinator = new PauseCoordinator(ni);
 
             for (int i = 0; i < ni; i++) {
-                Immortal i1 = new Immortal("im" + i, il, DEFAULT_IMMORTAL_HEALTH, DEFAULT_DAMAGE_VALUE,ucb);
+                Immortal i1 = new Immortal("im" + i, il, DEFAULT_IMMORTAL_HEALTH, DEFAULT_DAMAGE_VALUE,ucb,pauseCoordinator);
                 il.add(i1);
             }
             return il;
